@@ -30,5 +30,5 @@ REST API для менеджера задач с ограничением на 1
 ### Настройка БД
 ```sql
 CREATE DATABASE todo_db;
-CREATE USER todo_user WITH PASSWORD 'todo123';
+CREATE USER todo_user WITH PASSWORD 'your_strong_password';
 GRANT ALL PRIVILEGES ON DATABASE todo_db TO todo_user;
