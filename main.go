@@ -6,7 +6,8 @@ import (
     "log"
     "net/http"
     "strconv"
-    "github.com/jackc/pgx/v5"
+    "time"
+    "github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Task struct {
@@ -15,17 +16,32 @@ type Task struct {
     Completed bool   `json:"completed"`
 }
 
-var db *pgx.Conn
+var db *pgxpool.Pool
 
 func main() {
-    var err error
-    connString := "postgres://todo_user:todo123@localhost:5432/todo_db"
-    db, err = pgx.Connect(context.Background(), connString)
+    connString := "postgres://todo_user:todo123321odot@localhost:5432/todo_db"
+    
+    config, err := pgxpool.ParseConfig(connString)
     if err != nil {
-        log.Fatal("Unable to connect to database:", err)
+        log.Fatal("Unable to parse connection string:", err)
     }
-    defer db.Close(context.Background())
-    log.Println("Connected to PostgreSQL")
+    
+    config.MaxConns = 10
+    config.MinConns = 2
+    config.MaxConnIdleTime = 5 * time.Minute
+    config.HealthCheckPeriod = 30 * time.Second
+    
+    db, err = pgxpool.NewWithConfig(context.Background(), config)
+    if err != nil {
+        log.Fatal("Unable to create connection pool:", err)
+    }
+    defer db.Close()
+    
+    if err := db.Ping(context.Background()); err != nil {
+        log.Fatal("Unable to ping database:", err)
+    }
+    
+    log.Println("Connected to PostgreSQL (connection pool ready)")
 
     http.HandleFunc("GET /api/tasks", corsMiddleware(getTasks))
     http.HandleFunc("POST /api/tasks", corsMiddleware(createTask))
@@ -53,7 +69,8 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func getTasks(w http.ResponseWriter, r *http.Request) {
     rows, err := db.Query(context.Background(), "SELECT id, title, completed FROM tasks ORDER BY id")
     if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
+        log.Println("Database error:", err)
+        http.Error(w, "Database error", http.StatusInternalServerError)
         return
     }
     defer rows.Close()
@@ -102,19 +119,32 @@ func updateTask(w http.ResponseWriter, r *http.Request) {
     }
 
     var req struct {
-        Completed bool `json:"completed"`
+        Title     string `json:"title"`
+        Completed bool   `json:"completed"`
     }
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
         http.Error(w, "Invalid JSON", http.StatusBadRequest)
         return
     }
 
+    if req.Title != "" {
+        _, err = db.Exec(context.Background(),
+            "UPDATE tasks SET title=$1 WHERE id=$2", req.Title, id)
+        if err != nil {
+            log.Println("Update title error:", err)
+            http.Error(w, "Failed to update title", http.StatusInternalServerError)
+            return
+        }
+    }
+
     _, err = db.Exec(context.Background(),
         "UPDATE tasks SET completed=$1 WHERE id=$2", req.Completed, id)
     if err != nil {
-        http.Error(w, "Task not found", http.StatusNotFound)
+        log.Println("Update status error:", err)
+        http.Error(w, "Failed to update status", http.StatusInternalServerError)
         return
     }
+
     w.WriteHeader(http.StatusOK)
 }
 
